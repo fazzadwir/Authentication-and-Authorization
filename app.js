@@ -8,6 +8,7 @@ import session from 'express-session';
 import pgSession from 'connect-pg-simple';
 import passport from 'passport';
 import { Strategy as LocalStrategy } from 'passport-local';
+import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 
 const app = express();
 const port = 3000;
@@ -99,9 +100,54 @@ passport.deserializeUser(async (id, done) => {
     }
 });
 
+// Google Strategy
+passport.use(new GoogleStrategy({
+    clientID: process.env.CLIENT_ID,
+    clientSecret: process.env.CLIENT_SECRET,
+    callbackURL: "http://localhost:3000/auth/google/secrets",
+    userProfileURL: "https://www.googleapis.com/oauth2/v3/userinfo",
+  },
+  async (accessToken, refreshToken, profile, done) => {
+    try {
+      const result = await db.query('SELECT * FROM userdb WHERE google_id = $1', [profile.id]);
+
+      if (result.rows.length > 0) {
+        // User already exists, return the user
+        return done(null, result.rows[0]);
+      } else {
+        // User doesn't exist, create a new user in the database
+
+        // Check if profile.emails exists and has at least one element
+        const userEmail = (profile.emails && profile.emails.length > 0) ? profile.emails[0].value : null;
+
+        const newUserResult = await db.query(
+          'INSERT INTO userdb (google_id, google_display_name, google_email) VALUES ($1, $2, $3) RETURNING *',
+          [profile.id.toString(), profile.displayName, userEmail]
+        );
+
+        const newUser = newUserResult.rows[0];
+        return done(null, newUser);
+      }
+    } catch (error) {
+      return done(error);
+    }
+  }
+));
+
 app.get("/", (req, res) => {
     res.render("home.ejs")
 });
+
+app.get("/auth/google",
+    passport.authenticate('google', {scope: ['profile'] })
+);
+
+app.get("/auth/google/secrets", 
+  passport.authenticate('google', { failureRedirect: "/login" }),
+  function(req, res) {
+    // Successful authentication, redirect home.
+    res.redirect('/secrets');
+  });
 
 app.get("/login", (req,res) => {
     res.render("login.ejs");
