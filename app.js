@@ -1,13 +1,14 @@
+import 'dotenv/config'
 import express from 'express';
 import bodyParser from 'body-parser';
-import ejs from 'ejs';;
-import mongoose from 'mongoose';
 import pg from 'pg';
 import crypto from 'crypto';
+import session from 'express-session';
+import passport from 'passport';
+import passportLocal from 'passport-local';
 
 const app = express();
-const port = 3000;
-
+const port = 3000;      
 
 const db = new pg.Client({
     host: "localhost",
@@ -18,38 +19,47 @@ const db = new pg.Client({
 });
 
 db.connect();
+const LocalStrategy = passportLocal.Strategy;
 
-function generateRandomKey() {
-    return crypto.randomBytes(32).toString('hex');
-};
+passport.use(new LocalStrategy(
+    { usernameField: 'email' }, // Assuming you use email as the username field
+    async (email, password, done) => {
+        // Your authentication logic with the database goes here
+        // Example: Check if the email and password match a user in your database
+        const user = await getUserByEmail(email);
+        if (!user || !comparePasswords(password, user.password)) {
+            return done(null, false, { message: 'Incorrect email or password' });
+        }
+        return done(null, user);
+    }
+));
 
-const ENCRYPTION_KEY = generateRandomKey();
-const IV_LENGTH = 16;
+passport.serializeUser((user, done) => {
+    done(null, user.id);
+});
 
-function encrypt(text) {
-    const iv = crypto.randomBytes(IV_LENGTH);
-    const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
-    let encrypted = cipher.update(text, 'utf-8', 'hex');
-    encrypted += cipher.final('hex');
-    return iv.toString('hex') + encrypted;
-}
-
-function decrypt(text) {
-    const iv = Buffer.from(text.slice(0, IV_LENGTH * 2), 'hex');
-    const encryptedText = text.slice(IV_LENGTH * 2);
-    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
-    let decrypted = decipher.update(encryptedText, 'hex', 'utf-8');
-    decrypted += decipher.final('utf-8');
-    return decrypted;
-}
+passport.deserializeUser(async (id, done) => {
+    const user = await getUserById(id);
+    done(null, user);
+});
 
 app.use(express.static("public"));
 app.set('view engine', 'ejs');
 app.use(bodyParser.urlencoded({extended: true}));
 
+app.use(session({
+    secret: "Our little babby.",
+    resave: false,
+    saveUninitialized: false,
+}));
+
+app.use(passport.initialize());
+app.use(passport.session());
+
 app.get("/", (req, res) => {
     res.render("home.ejs")
 });
+
 
 app.get("/login", (req,res) => {
     res.render("login.ejs");
@@ -60,56 +70,29 @@ app.get("/register", (req,res) => {
 });
 
 app.post("/register", async (req, res) => {
-    try {
-        const newUsername = req.body.username;
-        const newPassword = req.body.password;
 
-        // Encrypt the password before storing it in the database
-        const encryptedPassword = encrypt(newPassword);
-
-        const checkUser = await db.query("SELECT * FROM userdb WHERE email = $1", [newUsername]);
-        if (checkUser.rows.length > 0) {
-            return res.status(409).json({ message: "User already registered" });
-        }
-
-        const result = await db.query(
-            "INSERT INTO userdb (email, password) VALUES ($1, $2)", [newUsername, encryptedPassword]);
-        res.render("secrets.ejs");
-    } catch (error) {
-        console.log("Error", error);
-        res.status(500).json({ message: "Internal server error" });
-    }
 });
 
-app.post("/login", async (req, res) => {
-    const getUsername = req.body.username;
-    const getPassword = req.body.password;
-
-    try {
-        const result = await db.query(
-            "SELECT * FROM userdb WHERE email = $1", [getUsername]);
-
-        if (result.rows.length === 0) {
-            console.log(result.rows);
-            return res.status(401).json({ message: "Wrong username or password" });
-        }
-
-        // Decrypt the stored password and compare it with the entered password
-        const decryptedPassword = decrypt(result.rows[0].password);
-
-        if (decryptedPassword === getPassword) {
-            res.render("secrets.ejs");
-        } else {
-            res.redirect("login.ejs");
-        }
-
-    } catch (error) {
-        console.error("Error executing query", error);
-        res.status(500).json({ message: "Internal server error" });
-    }
-});
+app.post("/login",  passport.authenticate('local', {
+    successRedirect: '/', // Redirect to the home page on successful login
+    failureRedirect: '/login', // Redirect to login page on failure
+    failureFlash: true // Enable flash messages to show error messages
+}));
 
 
 app.listen(port, () => {
     console.log("Server is running on port " + port);
 });
+
+// Helper functions
+async function getUserByEmail(email) {
+    // Your database query to get a user by email goes here
+}
+
+async function getUserById(id) {
+    // Your database query to get a user by ID goes here
+}
+
+function comparePasswords(password, hashedPassword) {
+    // Your password comparison logic goes here
+}
