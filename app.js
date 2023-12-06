@@ -2,6 +2,7 @@ import 'dotenv/config'
 import express from 'express';
 import bodyParser from 'body-parser';
 import pg from 'pg';
+import flash from "express-flash";
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import session from 'express-session';
@@ -56,6 +57,7 @@ function decrypt(text) {
 }
 
 //middleware
+app.use(flash());
 app.use(express.static("public"));
 app.set('view engine', 'ejs');
 app.use(bodyParser.urlencoded({extended: true}));
@@ -168,9 +170,13 @@ app.post("/register", async (req, res) => {
                 return res.status(409).json({ message: "User already registered" });
             }
     
-            const result = await db.query(
+            await db.query(
                 "INSERT INTO userdb (email, password) VALUES ($1, $2)", [newUsername, encryptedPassword]);
-            res.render("secrets.ejs");
+            
+            const secret = await db.query(
+                "SELECT secret from userdb WHERE secret IS NOT NULL");
+            const userWithSecret = secret.rows;
+            res.render("secrets.ejs", {userWithSecret: userWithSecret});  
         });    
     } catch (error) {
         console.log("Error", error);
@@ -184,13 +190,38 @@ app.post("/login", passport.authenticate('local', {
     failureFlash: true,
 }));
 
-app.get("/secrets", (req, res) => {
+app.get("/secrets", async (req, res) => {
     if (req.isAuthenticated()) {
-        res.render("secrets.ejs");
+        try {
+            const result = await db.query(
+                "SELECT secret from userdb WHERE secret IS NOT NULL");
+            const userWithSecret = result.rows;
+            res.render("secrets.ejs", {userWithSecret: userWithSecret});  
+        } catch (error) {
+            console.error("Error executing database query:", err);
+            res.status(500).send("Internal Server Error");
+        }
     } else {
         res.redirect("/login");
     }
 });
+
+app.get("/submit", (req,res) => {
+    res.render("submit.ejs");
+});
+
+app.post("/submit", async (req,res) => {
+    const newSecret = req.body.secret;
+    const getID = req.user.id;
+    
+    if(newSecret === ""){
+        return res.status(409).json({ message: "Insert your Secret" });
+    } else {
+        const result = await db.query(
+            "UPDATE userdb SET secret = ($1) WHERE id = $2", [newSecret, getID]);
+        res.redirect("/secrets");
+    }
+})
 
 app.get("/logout", (req, res) => {
     req.logout((err) => {
@@ -200,6 +231,8 @@ app.get("/logout", (req, res) => {
         res.redirect("/");
     });
 });
+
+
 
 
 app.listen(port, () => {
